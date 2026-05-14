@@ -748,14 +748,34 @@ export class ComponentTools implements ToolExecutor {
                 
                 // 构建正确的属性路径
                 let propertyPath = `__comps__.${rawComponentIndex}.${property}`;
-                
+
                 // 特殊处理资源类属性
-                if (propertyType === 'asset' || propertyType === 'spriteFrame' || propertyType === 'prefab' || 
+                if (propertyType === 'asset' || propertyType === 'spriteFrame' || propertyType === 'prefab' ||
                     (propertyInfo.type === 'asset' && propertyType === 'string')) {
-                    
+
+                    // 资源类属性的序列化属性名可能带下划线前缀（如 _spriteFrame 而不是 spriteFrame）
+                    // 根据组件类型和属性名确定正确的序列化属性名
+                    let serializedPropertyName = property;
+                    if (componentType === 'cc.Sprite' && property === 'spriteFrame') {
+                        serializedPropertyName = '_spriteFrame';
+                    } else if (componentType === 'cc.Sprite' && property === 'atlas') {
+                        serializedPropertyName = '_atlas';
+                    } else if (property === 'texture' && (componentType === 'cc.Sprite' || componentType === 'cc.MeshRenderer')) {
+                        serializedPropertyName = '_texture';
+                    } else if (property === 'material' && (componentType === 'cc.Sprite' || componentType === 'cc.MeshRenderer')) {
+                        serializedPropertyName = '_material';
+                    } else if (property === 'font' && (componentType === 'cc.Label' || componentType === 'cc.RichText')) {
+                        serializedPropertyName = '_font';
+                    } else if (property === 'clip' && componentType === 'cc.Animation') {
+                        serializedPropertyName = '_clip';
+                    }
+
+                    propertyPath = `__comps__.${rawComponentIndex}.${serializedPropertyName}`;
+
                     console.log(`[ComponentTools] Setting asset reference:`, {
                         value: processedValue,
                         property: property,
+                        serializedPropertyName: serializedPropertyName,
                         propertyType: propertyType,
                         path: propertyPath
                     });
@@ -1062,9 +1082,18 @@ export class ComponentTools implements ToolExecutor {
                 
                 // Step 5: 等待Editor完成更新，然后验证设置结果
                 await new Promise(resolve => setTimeout(resolve, 200)); // 等待200ms让Editor完成更新
-                
-                const verification = await this.verifyPropertyChange(nodeUuid, componentType, property, originalValue, actualExpectedValue);
-                
+
+                // 验证操作在独立的try-catch中执行，避免验证失败导致设置被报告为失败
+                let verification = { verified: false, actualValue: undefined };
+                let verificationError: string | null = null;
+                try {
+                    verification = await this.verifyPropertyChange(nodeUuid, componentType, property, originalValue, actualExpectedValue);
+                } catch (verifyError: any) {
+                    // 验证过程中可能发生错误（如属性结构与预期不符），但这不影响属性已成功设置的事实
+                    console.warn(`[ComponentTools] Verification failed (property may still be set correctly):`, verifyError.message);
+                    verificationError = verifyError.message;
+                }
+
                 resolve({
                     success: true,
                     message: `Successfully set ${componentType}.${property}`,
@@ -1073,10 +1102,11 @@ export class ComponentTools implements ToolExecutor {
                         componentType,
                         property,
                         actualValue: verification.actualValue,
-                        changeVerified: verification.verified
+                        changeVerified: verification.verified,
+                        verificationError: verificationError  // 如果验证有错误，会在这里提示但不影响success
                     }
                 });
-                
+
             } catch (error: any) {
                 console.error(`[ComponentTools] Error setting property:`, error);
                 resolve({
